@@ -545,19 +545,26 @@ def run_claude(pdf_bytes: bytes, cfg: dict) -> dict:
     t0 = time.time()
     client = anthropic.Anthropic(api_key=cfg["api_key"])
     b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
-    msg = client.messages.create(
-        model=cfg.get("model", "claude-sonnet-5"),
-        max_tokens=cfg.get("max_tokens", 32000),
-        system=CLAUDE_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "document",
-                 "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
-                {"type": "text", "text": "Extract this invoice into the canonical JSON schema."},
-            ],
-        }],
-    )
+    content = [
+        {"type": "document",
+         "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
+        {"type": "text", "text": "Extract this invoice into the canonical JSON schema."},
+    ]
+
+    def _call(max_tok):
+        return client.messages.create(
+            model=cfg.get("model", "claude-sonnet-5"),
+            max_tokens=max_tok,
+            system=CLAUDE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+
+    # Try a high limit for long invoices; if the model rejects it, step down.
+    want = cfg.get("max_tokens", 16000)
+    try:
+        msg = _call(want)
+    except Exception:
+        msg = _call(8192)   # safe floor supported by all current models
     latency = time.time() - t0
     raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
     parsed = _parse_json(raw)
