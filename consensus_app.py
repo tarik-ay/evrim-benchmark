@@ -112,7 +112,11 @@ def style_table(df, engines):
         if v == "cogunluk":    return "color:#854F0B;font-weight:600"
         if v == "bolunmus":    return "color:#A32D2D;font-weight:600"
         return ""
-    return df.style.applymap(color_status, subset=["Durum"])
+    styler = df.style
+    # pandas >= 2.1 renamed applymap -> map
+    if hasattr(styler, "map"):
+        return styler.map(color_status, subset=["Durum"])
+    return styler.applymap(color_status, subset=["Durum"])
 
 
 if run:
