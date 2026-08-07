@@ -461,7 +461,83 @@ def _parse_json(text: str) -> dict:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Output was likely truncated at the token limit. Recover what we can:
+        # close the "items" array at the last complete object and close the root.
+        salvaged = _salvage_truncated_json(text)
+        if salvaged is not None:
+            return salvaged
+        raise
+
+
+def _salvage_truncated_json(text: str) -> Optional[dict]:
+    """
+    Best-effort recovery of a JSON object truncated mid-array. Keeps the header
+    fields and every fully-closed item; drops the half-written trailing item.
+    """
+    try:
+        # find the items array
+        key = '"items"'
+        ki = text.find(key)
+        if ki == -1:
+            # no items array — trim to the last complete "key": value pair
+            # cut at the last comma that is not inside a string, then close.
+            depth = 0
+            in_str = False
+            esc = False
+            last_comma = -1
+            for i, c in enumerate(text):
+                if in_str:
+                    if esc: esc = False
+                    elif c == "\\": esc = True
+                    elif c == '"': in_str = False
+                    continue
+                if c == '"': in_str = True
+                elif c == "{": depth += 1
+                elif c == "}": depth -= 1
+                elif c == "," and depth == 1:
+                    last_comma = i
+            if last_comma == -1:
+                return None
+            candidate = text[:last_comma] + "}"
+            return json.loads(candidate)
+        # walk to the '[' after items
+        lb = text.find("[", ki)
+        if lb == -1:
+            return None
+        # scan objects inside the array, tracking the end of the last complete one
+        depth = 0
+        in_str = False
+        esc = False
+        last_complete = None
+        for i in range(lb + 1, len(text)):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    last_complete = i
+        if last_complete is None:
+            # no complete item; make items empty
+            head = text[:lb + 1] + "]}"
+            return json.loads(head)
+        rebuilt = text[:last_complete + 1] + "]}"
+        return json.loads(rebuilt)
+    except Exception:
+        return None
 
 
 def run_claude(pdf_bytes: bytes, cfg: dict) -> dict:
@@ -471,7 +547,7 @@ def run_claude(pdf_bytes: bytes, cfg: dict) -> dict:
     b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
     msg = client.messages.create(
         model=cfg.get("model", "claude-sonnet-5"),
-        max_tokens=cfg.get("max_tokens", 16000),
+        max_tokens=cfg.get("max_tokens", 32000),
         system=CLAUDE_SYSTEM_PROMPT,
         messages=[{
             "role": "user",
@@ -606,7 +682,7 @@ def run_gemini(pdf_bytes: bytes, cfg: dict) -> dict:
             {"mime_type": "application/pdf", "data": pdf_bytes},
             "Extract this invoice into the canonical JSON schema.",
         ],
-        generation_config={"temperature": 0, "max_output_tokens": 16000},
+        generation_config={"temperature": 0, "max_output_tokens": 32000},
     )
     latency = time.time() - t0
     parsed = _parse_json(resp.text)
