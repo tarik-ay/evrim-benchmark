@@ -1,0 +1,11 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
+
+# Internal dev docs / unrelated tools — not part of this repo's public surface
+HANDOVER.md
+mapping_app.py
+mapping_core.py
+_check_secrets.py

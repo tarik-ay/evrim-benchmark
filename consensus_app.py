@@ -91,7 +91,7 @@ def show_pdf(pdf_bytes, height=820):
         unsafe_allow_html=True,
     )
 
-STATUS_TR = {"tam": "tam uzlasma", "cogunluk": "cogunluk", "boluk": "bolunmus"}
+STATUS_TR = {"tam": "tam uzlasma", "cogunluk": "cogunluk", "boluk": "bolunmus", "tek": "tek motor"}
 
 def agreement_table(rows, engines):
     """One row per field; a column per engine + agreement + suggested + status."""
@@ -111,12 +111,41 @@ def style_table(df, engines):
         if v == "tam uzlasma": return "color:#0F6E56;font-weight:600"
         if v == "cogunluk":    return "color:#854F0B;font-weight:600"
         if v == "bolunmus":    return "color:#A32D2D;font-weight:600"
+        if v == "tek motor":   return "color:#6B7280;font-weight:600"
         return ""
     styler = df.style
     # pandas >= 2.1 renamed applymap -> map
     if hasattr(styler, "map"):
         return styler.map(color_status, subset=["Durum"])
     return styler.applymap(color_status, subset=["Durum"])
+
+
+def item_field_table(field_rows, engines):
+    """Bir kalem grubunun alan x motor x uzlasma tablosu (satir konsensus)."""
+    out = []
+    for r in field_rows:
+        rec = {"Alan": r["label"]}
+        for e in engines:
+            rec[e] = r["values"].get(e, "—") if r["values"].get(e) is not None else "—"
+        rec["Uzlasma"] = f'{round(r["agreement"]*100)}% ({len(r["top_group"])}/{r["n"]})'
+        rec["Onerilen"] = r["suggested"] if r["has_majority"] else "—"
+        rec["Durum"] = STATUS_TR.get(r["status"], r["status"])
+        out.append(rec)
+    return pd.DataFrame(out)
+
+
+def engine_summary_table(rows):
+    # Sadece iki yuzde: Kapsama (faturayi ne kadar doldurdu) ve Uyum orani
+    # (doldurdugunda cogunlukla ayni fikirde miydi). Ham sayilar (kac alan,
+    # kac kez cogunluk/azinlik) ayri sutunlarda kafa karistiriyordu — kaldirildi.
+    out = []
+    for r in rows:
+        out.append({
+            "Motor": r["engine"],
+            "Kapsama": f'{round(r["coverage"]*100)}%',
+            "Uyum orani": f'{round(r["alignment_rate"]*100)}%' if r["alignment_rate"] is not None else "—",
+        })
+    return pd.DataFrame(out)
 
 
 if run:
@@ -144,8 +173,20 @@ if run:
                 st.warning(f"{name}: {r['error']}")
             st.stop()
 
+        truncated = [name for name, out in ok.items() if out.get("truncated")]
+        if truncated:
+            st.error(
+                "**" + ", ".join(truncated) + "** cikisi token limitinde kesildi — "
+                "bu motor(lar) faturanin TAMAMINI isleyemedi, kalem sayisi ve konsensus "
+                "eksik veriye dayaniyor olabilir. 'Sadece 1 motor gordu' isaretli kalemler "
+                "bu motorlarin gercekten kacirdigi bir kalem OLMAYABILIR — kesilme yuzunden "
+                "hic uretilmemis olabilir."
+            )
+
         result = cc.consensus_header(ok)
+        line_result = cc.consensus_lines(ok)
         engines = list(ok.keys())
+        summary_rows = cc.engine_summary(result, line_result, engines)
 
         left, right = st.columns([1, 1], gap="medium")
 
@@ -155,9 +196,9 @@ if run:
 
         with right:
             m1, m2, m3 = st.columns(3)
-            m1.metric("Genel uzlasma", f'{round(result["overall_agreement"]*100)}%')
-            m2.metric("Tam uzlasan alan", result["clean"])
-            m3.metric("Incelenecek", result["review"])
+            m1.metric("Baslik uzlasma", f'{round(result["overall_agreement"]*100)}%')
+            m2.metric("Tam uzlasan baslik alani", result["clean"])
+            m3.metric("Incelenecek baslik alani", result["review"])
 
             if bad:
                 st.warning("Calismayan motor: " + ", ".join(
@@ -165,24 +206,66 @@ if run:
 
             st.caption(f"{len(engines)} motor: " + " · ".join(engines))
 
+            st.subheader("Motor ozeti")
+            st.caption(
+                "Bu tek faturadan turetilir; motor guvenilirlik profili degildir "
+                "(o coklu-fatura biriken istatistik gerektirir, ayri asama). "
+                "Kapsama = faturayi ne kadar doldurdu, Uyum orani = doldurdugunda "
+                "cogunlukla ayni fikirde miydi."
+            )
+            st.dataframe(engine_summary_table(summary_rows),
+                         use_container_width=True, hide_index=True)
+
+            st.subheader("Baslik konsensusu")
             df = agreement_table(result["rows"], engines)
             st.dataframe(style_table(df, engines),
-                         use_container_width=True, hide_index=True, height=560)
+                         use_container_width=True, hide_index=True, height=420)
 
-            with st.expander("Incelenecek alanlar (uzlasma < %100)"):
-                flagged = [r for r in result["rows"] if r["status"] != "tam"]
+            with st.expander("Incelenecek baslik alanlari (uzlasma < %100)"):
+                flagged = [r for r in result["rows"] if r["status"] not in ("tam",)]
                 if not flagged:
                     st.success("Tum alanlarda tam uzlasma.")
                 for r in flagged:
                     vals = " · ".join(f"{e}: {v}" for e, v in r["values"].items())
                     miss = f" · okumadi: {', '.join(r['missing'])}" if r["missing"] else ""
                     st.markdown(
-                        f"**{r['label']}** — uzlasma {round(r['agreement']*100)}% "
+                        f"**{r['label']}** — {STATUS_TR.get(r['status'], r['status'])} "
                         f"({len(r['top_group'])}/{r['n']}){miss}  \n{vals}"
                     )
 
-        with st.expander("Ham motor ciktilari (baslik)"):
-            st.json({name: (ok[name].get("header") or {}) for name in engines})
+        st.divider()
+        st.subheader("Kalem (satir) konsensusu")
+        st.caption("Ground truth yok — motorlarin urun kalemleri birbirine hizalanir "
+                   "(esik ve mantik icin bkz. HANDOVER; gercek faturalarla kalibre edilmeli).")
+
+        lm1, lm2, lm3, lm4 = st.columns(4)
+        lm1.metric("Kalem grubu", line_result["group_count"])
+        lm2.metric("Satir uzlasma", f'{round(line_result["overall_line_agreement"]*100)}%')
+        lm3.metric("Sadece 1 motor gordu", line_result["single_engine_only_count"])
+        lm4.metric("Kontrol edilmeli", len(line_result["conflicts"]))
+
+        if line_result["conflicts"]:
+            st.warning(
+                f'{len(line_result["conflicts"])} kalem grubunda olasi bolunmus/birlesmis '
+                "satir ya da belirsiz eslesme var — asagida ilgili kalemlerde isaretli."
+            )
+
+        for row in line_result["rows"]:
+            present = ", ".join(row["engines_present"])
+            miss = f' · okumadi: {", ".join(row["engines_missing"])}' if row["engines_missing"] else ""
+            tag = "sadece 1 motor" if row["single_engine_only"] else f'{round(row["row_agreement"]*100)}% uzlasma'
+            title = f'Kalem {row["index"]} — {present} ({tag}){miss}'
+            default_open = (not row["single_engine_only"]) and row["row_agreement"] < 1.0
+            with st.expander(title, expanded=default_open):
+                if row["fields"]:
+                    fdf = item_field_table(row["fields"], engines)
+                    st.dataframe(style_table(fdf, engines), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Bu kalem grubunda karsilastirilabilir alan yok.")
+
+        with st.expander("Ham motor ciktilari (baslik + kalemler)"):
+            st.json({name: {"header": ok[name].get("header") or {},
+                            "items": ok[name].get("items") or []} for name in engines})
 
     except Exception as e:
         prog.empty()

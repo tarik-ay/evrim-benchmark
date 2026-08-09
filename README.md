@@ -1,31 +1,47 @@
-# Evrim — Engine Benchmark
+# Evrim — Konsensus Fatura Cikarim
 
-Compares invoice-extraction engines (**Rierino, Claude, Nanonets, Gemini**) against a
-manually keyed ground truth. Every engine's output is converted into one **canonical
-schema** (22 header + 16 line fields), line items are aligned by product code, and each
-engine is scored field-by-field.
+Ayni fatura PDF'i 4 motora birden verilir (**Rierino, Claude, Nanonets, Gemini**), her
+motorun ciktisi ortak bir **kanonik semaya** (22 baslik + 16 satir alani) cevrilir, ve
+her alanda (hem baslik hem urun satirlari) motorlarin **birbirleriyle** ne kadar uzlastigi
+gosterilir. **Ground truth (elle hazirlanmis dogru cevap) YOK** — referans, motorlarin
+kendisidir. Detay ve tasarim kararlari icin: [`HANDOVER.md`](HANDOVER.md).
 
-## What it does
-- Upload a **PDF** + its **ground-truth JSON** (canonical schema).
-- Pick engines; each runs on the PDF and returns canonical fields.
-- Scores header accuracy, line accuracy, overall — plus latency and cost.
-- Side-by-side comparison + per-engine field detail (match/miss).
-
-## Setup
+## Ana arac: `consensus_app.py` (canli, ground-truth'suz)
+- Bir **PDF** yukle, motorlari sec, calistir.
+- Her baslik alaninda VE her urun satirinin her alaninda: motorlarin degeri yan yana,
+  uzlasma yuzdesi, cogunlugun onerdigi deger, "kontrol edilmeli" isareti.
+- Satir hizalama ground truth olmadan yapilir (motorlar farkli sayida/sirada kalem
+  uretir) — `consensus_core.py::consensus_lines`.
+- Tek calistirmaya ozel motor ozeti: hangi motor kac alani cevapladi, cogunlukla
+  hemfikir miydi (bu bir "motor profili" degil, sadece o faturaya ozel bir gozlem).
+- Bir motorun ciktisi token limitinde kesilirse acik uyari gosterir (`truncated`).
 
 ```bash
 cd evrim_benchmark
 pip install -r requirements.txt
 
-# add your keys/endpoints:
 mkdir -p .streamlit
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 #   then edit .streamlit/secrets.toml
 
-streamlit run app.py
+streamlit run consensus_app.py
 ```
 
 Open the URL Streamlit prints (usually http://localhost:8501).
+
+## Ikincil arac: `app.py` (eski, ground-truth'lu benchmark)
+Elle hazirlanmis dogru-cevap (ground truth) JSON'u olan faturalarla motorlarin
+**dogrulugunu** olcmek icin. Konsensus aracindan farkli amac: burada "dogru cevap"
+bilinir, motorlar ona karsi puanlanir. Ic QA / motor secimi icin faydali, canli
+kullanicilara gosterilen arac bu DEGIL.
+- Upload a **PDF** + its **ground-truth JSON** (canonical schema).
+- Pick engines; each runs on the PDF and returns canonical fields.
+- Scores header accuracy, line accuracy, overall — plus latency and cost.
+- Side-by-side comparison + per-engine field detail (match/miss).
+
+```bash
+streamlit run app.py
+```
 
 ## Engine status
 | Engine | Status | Needs |
