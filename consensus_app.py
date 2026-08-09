@@ -7,10 +7,10 @@ uzlasmasi ve cogunluk degeri gosterilir. Ground truth YOK.
 Calistir:  streamlit run consensus_app.py
 """
 
-import base64
 import traceback
 
 import pandas as pd
+import pymupdf
 import streamlit as st
 
 import consensus_core as cc
@@ -83,13 +83,25 @@ with st.sidebar:
                "degil, 'dogrulanmali' demektir.")
 
 
-def show_pdf(pdf_bytes, height=820):
-    b64 = base64.b64encode(pdf_bytes).decode("utf-8")
-    st.markdown(
-        f'<iframe src="data:application/pdf;base64,{b64}" width="100%" '
-        f'height="{height}" style="border:1px solid #D8DED7;border-radius:6px;"></iframe>',
-        unsafe_allow_html=True,
-    )
+@st.cache_data(show_spinner=False)
+def _pdf_to_page_images(pdf_bytes: bytes, dpi: int = 150) -> list[bytes]:
+    # Base64 iframe embedding is blocked by Chrome on HTTPS (Streamlit Cloud) —
+    # "This page has been blocked by Chrome". Render pages to PNG instead; works
+    # identically local and deployed. Cached so reruns don't re-render on every
+    # widget interaction.
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return [page.get_pixmap(dpi=dpi).tobytes("png") for page in doc]
+    finally:
+        doc.close()
+
+
+def show_pdf(pdf_bytes):
+    images = _pdf_to_page_images(pdf_bytes)
+    multi = len(images) > 1
+    for i, img in enumerate(images, 1):
+        st.image(img, use_container_width=True,
+                  caption=f"Sayfa {i}/{len(images)}" if multi else None)
 
 STATUS_TR = {"tam": "tam uzlasma", "cogunluk": "cogunluk", "boluk": "bolunmus", "tek": "tek motor"}
 
